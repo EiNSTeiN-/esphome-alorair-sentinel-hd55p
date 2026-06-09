@@ -2,6 +2,9 @@ substitutions:
   name: alorair-hd55p
   friendly_name: AlorAir HD55P
   name_add_mac_suffix: "true"
+  ecan_e02_project_name: einstein.alorair_hd55p
+  ecan_e02_project_version: "0.1.0"
+  ecan_e02_import_url: github://EiNSTeiN-/esphome-alorair-sentinel-hd55p/configs/alorair-hd55p-ecan-e02.yaml@main
 
   # The HD55 family is not consistent. Try 50KBPS if this receives no frames.
   can_bit_rate: 125KBPS
