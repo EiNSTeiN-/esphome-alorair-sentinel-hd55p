@@ -1,0 +1,275 @@
+substitutions:
+  name: alorair-hd55p
+  friendly_name: AlorAir HD55P
+  name_add_mac_suffix: "true"
+
+  # The HD55 family is not consistent. Try 50KBPS if this receives no frames.
+  can_bit_rate: 125KBPS
+  can_mode: NORMAL
+  can_node_id: "0x05"
+
+packages:
+  ecan_e02: github://EiNSTeiN-/esphome-ecan-e02/packages/ecan-e02-base.yaml@main
+
+external_components:
+  - source: github://EiNSTeiN-/esphome-ecan-e02@main
+    components: [ecan_e02]
+
+esphome:
+  comment: "AlorAir Sentinel HD55P / HD55-family CAN monitor using Ebyte ECAN-E02"
+
+globals:
+  - id: hd55_power
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: hd55_continuous
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+interval:
+  - interval: 10s
+    then:
+      - canbus.send:
+          canbus_id: can0
+          can_id: 0x123
+          use_extended_id: false
+          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          static std::string previous_frame;
+          const std::string frame = id(can_last_frame).state;
+          if (frame.empty() || frame == previous_frame) {
+            return;
+          }
+          previous_frame = frame;
+
+          const size_t id_pos = frame.find("id=0x");
+          const size_t data_pos = frame.find("data=");
+          if (id_pos == std::string::npos || data_pos == std::string::npos) {
+            return;
+          }
+
+          const uint32_t frame_id = strtoul(frame.c_str() + id_pos + 5, nullptr, 16);
+          if (frame_id != 0x123 && frame_id != 0x3B0) {
+            return;
+          }
+
+          std::vector<uint8_t> bytes;
+          std::string data = frame.substr(data_pos + 5);
+          for (size_t i = 0; i + 1 < data.size() && bytes.size() < 8;) {
+            while (i < data.size() && data[i] == ' ') {
+              i++;
+            }
+            if (i + 1 >= data.size()) {
+              break;
+            }
+            char hex[3] = {data[i], data[i + 1], '\0'};
+            bytes.push_back(static_cast<uint8_t>(strtoul(hex, nullptr, 16)));
+            i += 2;
+          }
+          if (bytes.size() < 8) {
+            return;
+          }
+
+          // Newer HD55-family status frames are RH, setpoint, temp C, D3,
+          // status, D5, D6, D7. Ignore request/command echo frames.
+          if (bytes[0] < 20 || bytes[0] > 100 || bytes[1] < 20 || bytes[1] > 100) {
+            return;
+          }
+
+          const uint8_t status = bytes[4];
+          const bool power = (status & 0x01) != 0;
+          const bool running = (status & 0x02) != 0;
+          const bool continuous = (status & 0x08) != 0;
+          const bool pumping = (status & 0x10) != 0;
+
+          id(hd55_power) = power;
+          id(hd55_continuous) = continuous;
+
+          id(hd55_humidity).publish_state(bytes[0]);
+          id(hd55_setpoint_actual).publish_state(bytes[1]);
+          id(hd55_temperature).publish_state(bytes[2]);
+          id(hd55_status_byte).publish_state(status);
+          id(hd55_raw_byte_5).publish_state(bytes[5]);
+          id(hd55_raw_byte_6).publish_state(bytes[6]);
+          id(hd55_raw_byte_7).publish_state(bytes[7]);
+          id(hd55_power_sensor).publish_state(power);
+          id(hd55_running_sensor).publish_state(running);
+          id(hd55_continuous_sensor).publish_state(continuous);
+          id(hd55_pumping_sensor).publish_state(pumping);
+
+          std::string status_text;
+          if (!power && !continuous && !pumping) {
+            status_text = "Off";
+          } else if (running && pumping) {
+            status_text = continuous ? "Continuous running, pumping" : "Running, pumping";
+          } else if (running) {
+            status_text = continuous ? "Continuous running" : "Running";
+          } else if (pumping) {
+            status_text = power ? "Idle, pumping" : "Off, pumping";
+          } else if (power) {
+            status_text = continuous ? "Continuous idle" : "Idle";
+          } else if (continuous) {
+            status_text = "Continuous off";
+          } else {
+            status_text = "Unknown";
+          }
+          id(hd55_status_text).publish_state(status_text);
+
+sensor:
+  - platform: template
+    id: hd55_humidity
+    name: ${friendly_name} Humidity
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_setpoint_actual
+    name: ${friendly_name} Current Setpoint
+    unit_of_measurement: "%"
+    device_class: humidity
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_temperature
+    name: ${friendly_name} Temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_status_byte
+    name: ${friendly_name} Status Byte
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_raw_byte_5
+    name: ${friendly_name} Raw Byte 5
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_raw_byte_6
+    name: ${friendly_name} Raw Byte 6
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_raw_byte_7
+    name: ${friendly_name} Raw Byte 7
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+binary_sensor:
+  - platform: template
+    id: hd55_power_sensor
+    name: ${friendly_name} Power
+    device_class: power
+
+  - platform: template
+    id: hd55_running_sensor
+    name: ${friendly_name} Running
+    device_class: running
+
+  - platform: template
+    id: hd55_continuous_sensor
+    name: ${friendly_name} Continuous Mode
+
+  - platform: template
+    id: hd55_pumping_sensor
+    name: ${friendly_name} Pumping
+    disabled_by_default: true
+
+text_sensor:
+  - platform: template
+    id: hd55_status_text
+    name: ${friendly_name} Status
+
+number:
+  - platform: template
+    id: hd55_setpoint_control
+    name: ${friendly_name} Humidity Setpoint
+    min_value: 36
+    max_value: 99
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    device_class: humidity
+    set_action:
+      - lambda: |-
+          const uint8_t setpoint = static_cast<uint8_t>(x) + 0x80;
+          std::vector<uint8_t> data{setpoint, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+          id(can0)->send_data(0x123, false, data);
+          id(hd55_setpoint_actual).publish_state(x);
+
+switch:
+  - platform: template
+    id: hd55_power_switch
+    name: ${friendly_name} Power Switch
+    lambda: return id(hd55_power);
+    restore_mode: DISABLED
+    turn_on_action:
+      - if:
+          condition:
+            lambda: return !id(hd55_power);
+          then:
+            - canbus.send:
+                canbus_id: can0
+                can_id: 0x123
+                use_extended_id: false
+                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+    turn_off_action:
+      - if:
+          condition:
+            lambda: return id(hd55_power);
+          then:
+            - canbus.send:
+                canbus_id: can0
+                can_id: 0x123
+                use_extended_id: false
+                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+  - platform: template
+    id: hd55_continuous_switch
+    name: ${friendly_name} Continuous Mode Switch
+    lambda: return id(hd55_continuous);
+    restore_mode: DISABLED
+    turn_on_action:
+      - if:
+          condition:
+            lambda: return !id(hd55_continuous);
+          then:
+            - canbus.send:
+                canbus_id: can0
+                can_id: 0x123
+                use_extended_id: false
+                data: [0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]
+    turn_off_action:
+      - if:
+          condition:
+            lambda: return id(hd55_continuous);
+          then:
+            - lambda: |-
+                const uint8_t setpoint = static_cast<uint8_t>(id(hd55_setpoint_control).state) + 0x80;
+                std::vector<uint8_t> data{setpoint, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+                id(can0)->send_data(0x123, false, data);
+
+button:
+  - platform: template
+    name: ${friendly_name} Drain Pump Toggle
+    disabled_by_default: true
+    on_press:
+      - canbus.send:
+          canbus_id: can0
+          can_id: 0x123
+          use_extended_id: false
+          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00]
