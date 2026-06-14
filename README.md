@@ -17,18 +17,19 @@ The CAN port and protocol vary across the HD55 family:
 
 | Source | Reported model/context | CAN bitrate | Status/request notes |
 | --- | --- | --- | --- |
+| ECAN-E02 bench validation in this repo | HD55P connected to an Ebyte ECAN-E02 | 50KBPS | Remote-panel idle frame on `0x123` produces repeated status-like frames on `0x123`. |
 | Tinymicros HD55 wiki | Original HD55 remote reverse engineering | 50KBPS | Remote and display protocol documented around IDs `0x123` and `0x3b0`. |
 | Home Assistant thread, 2023+ | HD55 manufactured April 2023, serial starting `S38` | 125KBPS | Request/status format reported as `0x123` request, status bytes `RH actual, RH set, Temp, D3, Status, D5, D6, D7`. |
 | Home Assistant thread, 2024-2026 | HD55, HD55S, HD35P, HDi-family attempts | 50KBPS or 125KBPS | Several working examples, several wiring/CAN-enable gotchas, and some model-specific differences. |
 
-The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd55p-ecan-e02.yaml) defaults to the newer HD55P-style assumption:
+The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd55p-ecan-e02.yaml) defaults to the confirmed ECAN-E02 bench behavior:
 
-- `can_bit_rate: 125KBPS`
-- send a periodic status request on CAN ID `0x123`
-- decode status-like frames received on `0x3b0` or `0x123`
-- expose humidity, setpoint, temperature, status text, power/running/continuous/pumping flags, setpoint control, and power/continuous switches
+- `can_bit_rate: 50KBPS`
+- send a periodic remote-panel idle frame on CAN ID `0x123`
+- decode status-like frames received on `0x123` or `0x3b0`
+- expose humidity, setpoint, temperature, status text, power/running/continuous/pumping flags, setpoint control, and remote-button-style controls
 
-If you see no frames, try `can_bit_rate: 50KBPS` before changing anything else. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
+If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
 
 ## Hardware
 
@@ -40,6 +41,20 @@ Recommended parts:
 - Optional RJ45 breakout or sacrificial CAT5/CAT6 cable.
 
 Do not connect the dehumidifier remote-port VCC pin to the ECAN-E02 unless you have verified the voltage, current capacity, and grounding plan. The ECAN-E02 should normally be powered through its own intended supply, not from the dehumidifier remote jack.
+
+## Validated ECAN-E02 bench wiring
+
+A live HD55P bench setup was validated with the ECAN-E02 connected to the dehumidifier remote/CAN port as follows:
+
+| ECAN-E02 terminal | HD55P cable color | Function |
+| --- | --- | --- |
+| `G` | Brown | Ground |
+| `H` | White/blue | CANH |
+| `L` | Blue | CANL |
+
+The connected circuit measured about `119 ohm` across CANH/CANL without adding a bench resistor. On the short bench cable this behaved as a valid terminated CAN bus.
+
+The ECAN-E02 must also be powered from its normal power input. USB-UART power alone is not enough for the isolated CAN side of the ECAN-E02.
 
 ## Remote RJ45 / CAN pinout
 
@@ -89,9 +104,27 @@ The official HD55/HD55S manual also states that the machine has a one minute fan
 
 ## Protocol notes
 
+### Confirmed ECAN-E02 / HD55P bench behavior
+
+The tested HD55P responded at `50KBPS` when the ECAN-E02 transmitted an idle remote-panel frame once per second:
+
+| Direction | CAN ID | Data |
+| --- | --- | --- |
+| ECAN-E02 to HD55P | `0x123` | `01 00 00 32 14 00 00 00` |
+| HD55P to ECAN-E02 | `0x123` | examples: `2F 2A 32 18 08 01 14 20`, `2F 2A 32 18 07 01 14 20` |
+
+TWAI status stayed clean during this test: no TX/RX errors, missed frames, overruns, arbitration losses, or bus errors. That confirms the ECAN-E02 CAN pins, isolated transceiver path, HD55P wiring, termination, and `50KBPS` bitrate for this setup.
+
+Two negative tests are also useful:
+
+- `125KBPS` active polling on ID `0x123` produced TWAI TX/RX/bus errors on the same wiring, so it is not the correct bitrate for the tested port.
+- `50KBPS` polling with `id=0x123 data=00 00 00 00 00 00 00 00` stayed electrically clean but did not elicit frames.
+
+The byte interpretation for the confirmed `0x123` response is still provisional. The current ESPHome example treats byte `0` as humidity, byte `1` as setpoint, byte `3` as Celsius temperature, and byte `4` as a status-like bit field. Raw bytes are also exposed as disabled-by-default diagnostics so the mapping can be corrected as more captures are collected.
+
 ### Newer HD55 / HD55P-style notes
 
-These are the assumptions used by the example config:
+These reports are still useful for comparison, but they are not the default in this repo after the ECAN-E02 bench validation:
 
 | Direction | CAN ID | Data |
 | --- | --- | --- |
@@ -163,6 +196,8 @@ Unit-to-remote display frames are documented on CAN ID `0x3b0`:
 
 The Tinymicros page includes more complete bit tables for remote display symbols and error indications.
 
+The active controls in the ESPHome example use these remote-button-style frames rather than the newer zero-payload command format. Treat the controls as experimental until you have verified your own unit's response in Home Assistant and the raw CAN logs.
+
 ## Flash and use the example
 
 In ESPHome Builder, create/import a device configuration based on:
@@ -178,6 +213,15 @@ esphome config configs/alorair-hd55p-ecan-e02.yaml
 esphome run configs/alorair-hd55p-ecan-e02.yaml
 ```
 
+Development diagnostics are available under [`dev/configs/`](dev/configs/):
+
+```sh
+esphome run dev/configs/ecan-e02-hd55-remote-emulator.yaml
+esphome run dev/configs/ecan-e02-hd55p-zero-poll.yaml
+```
+
+Use the remote-emulator diagnostic first on an ECAN-E02 plus HD55P setup matching the wiring above. It sends the confirmed `50KBPS` idle remote frame and logs raw received CAN frames. Use the zero-poll diagnostic only when comparing against newer `125KBPS` reports.
+
 After adoption in Home Assistant, enable the disabled-by-default debug entities if needed:
 
 - `CAN Last Frame`
@@ -190,7 +234,7 @@ If Home Assistant sees the ECAN-E02 but no dehumidifier data arrives:
 
 1. Confirm the dehumidifier is powered.
 2. Confirm ECAN-E02 `can_mode` is `NORMAL`.
-3. Try `can_bit_rate: 50KBPS` and then `125KBPS`.
+3. Start with `can_bit_rate: 50KBPS`; try the `125KBPS` zero-poll diagnostic only for variants that do not respond.
 4. Swap CANH/CANL if you have never seen a valid frame.
 5. Confirm RJ45 pins 4/5/8 at the dehumidifier end, not just wire colors.
 6. If using a board other than ECAN-E02, confirm any CAN transceiver enable, standby, or 5 V enable pins. Several thread reports were fixed by enabling CAN support pins on LilyGO T-CAN-style boards.

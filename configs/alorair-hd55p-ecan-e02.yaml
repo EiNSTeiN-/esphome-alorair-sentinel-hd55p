@@ -6,10 +6,12 @@ substitutions:
   ecan_e02_project_version: "0.1.0"
   ecan_e02_import_url: github://EiNSTeiN-/esphome-alorair-sentinel-hd55p/configs/alorair-hd55p-ecan-e02.yaml@main
 
-  # The HD55 family is not consistent. Try 50KBPS if this receives no frames.
-  can_bit_rate: 125KBPS
+  # Confirmed on the bench with an HD55P remote/CAN port. Some newer reports use 125KBPS.
+  can_bit_rate: 50KBPS
   can_mode: NORMAL
   can_node_id: "0x05"
+  hd55_remote_humidity: "50"
+  hd55_remote_temperature_c: "20"
 
 packages:
   ecan_e02: github://EiNSTeiN-/esphome-ecan-e02/packages/ecan-e02-base.yaml@main
@@ -31,14 +33,23 @@ globals:
     restore_value: false
     initial_value: "false"
 
-interval:
-  - interval: 10s
+script:
+  - id: hd55_send_idle_remote_frame
+    mode: restart
     then:
-      - canbus.send:
-          canbus_id: can0
-          can_id: 0x123
-          use_extended_id: false
-          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - script.execute: pulse_can_led
+      - lambda: |-
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{
+              0x01, 0x00, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+          id(can_tx_test_frames)++;
+          id(can0)->send_data(0x123, false, data);
+
+interval:
+  - interval: 1s
+    then:
+      - script.execute: hd55_send_idle_remote_frame
 
   - interval: 1s
     then:
@@ -78,9 +89,11 @@ interval:
             return;
           }
 
-          // Newer HD55-family status frames are RH, setpoint, temp C, D3,
-          // status, D5, D6, D7. Ignore request/command echo frames.
-          if (bytes[0] < 20 || bytes[0] > 100 || bytes[1] < 20 || bytes[1] > 100) {
+          // Confirmed HD55P bench frames at 50KBPS look like:
+          // RH, setpoint, remote/display RH, temp C, status-ish, D5, D6, D7.
+          // Ignore request/command echo frames and unrelated CAN traffic.
+          if (bytes[0] < 20 || bytes[0] > 100 || bytes[1] < 20 || bytes[1] > 100 ||
+              bytes[3] > 60) {
             return;
           }
 
@@ -95,7 +108,8 @@ interval:
 
           id(hd55_humidity).publish_state(bytes[0]);
           id(hd55_setpoint_actual).publish_state(bytes[1]);
-          id(hd55_temperature).publish_state(bytes[2]);
+          id(hd55_temperature).publish_state(bytes[3]);
+          id(hd55_raw_byte_2).publish_state(bytes[2]);
           id(hd55_status_byte).publish_state(status);
           id(hd55_raw_byte_5).publish_state(bytes[5]);
           id(hd55_raw_byte_6).publish_state(bytes[6]);
@@ -150,6 +164,12 @@ sensor:
   - platform: template
     id: hd55_status_byte
     name: ${friendly_name} Status Byte
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_raw_byte_2
+    name: ${friendly_name} Raw Byte 2
     disabled_by_default: true
     accuracy_decimals: 0
 
@@ -209,10 +229,15 @@ number:
     device_class: humidity
     set_action:
       - lambda: |-
-          const uint8_t setpoint = static_cast<uint8_t>(x) + 0x80;
-          std::vector<uint8_t> data{setpoint, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+          const uint8_t setpoint = static_cast<uint8_t>(x);
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{0x01, 0x05, setpoint, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+          id(can_tx_test_frames)++;
           id(can0)->send_data(0x123, false, data);
           id(hd55_setpoint_actual).publish_state(x);
+      - delay: 200ms
+      - script.execute: hd55_send_idle_remote_frame
 
 switch:
   - platform: template
@@ -225,21 +250,27 @@ switch:
           condition:
             lambda: return !id(hd55_power);
           then:
-            - canbus.send:
-                canbus_id: can0
-                can_id: 0x123
-                use_extended_id: false
-                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+            - lambda: |-
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x01, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+                id(can_tx_test_frames)++;
+                id(can0)->send_data(0x123, false, data);
+            - delay: 200ms
+            - script.execute: hd55_send_idle_remote_frame
     turn_off_action:
       - if:
           condition:
             lambda: return id(hd55_power);
           then:
-            - canbus.send:
-                canbus_id: can0
-                can_id: 0x123
-                use_extended_id: false
-                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+            - lambda: |-
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x01, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+                id(can_tx_test_frames)++;
+                id(can0)->send_data(0x123, false, data);
+            - delay: 200ms
+            - script.execute: hd55_send_idle_remote_frame
 
   - platform: template
     id: hd55_continuous_switch
@@ -251,28 +282,51 @@ switch:
           condition:
             lambda: return !id(hd55_continuous);
           then:
-            - canbus.send:
-                canbus_id: can0
-                can_id: 0x123
-                use_extended_id: false
-                data: [0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]
+            - lambda: |-
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x03, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+                id(can_tx_test_frames)++;
+                id(can0)->send_data(0x123, false, data);
+            - delay: 200ms
+            - script.execute: hd55_send_idle_remote_frame
     turn_off_action:
       - if:
           condition:
             lambda: return id(hd55_continuous);
           then:
             - lambda: |-
-                const uint8_t setpoint = static_cast<uint8_t>(id(hd55_setpoint_control).state) + 0x80;
-                std::vector<uint8_t> data{setpoint, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x03, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+                id(can_tx_test_frames)++;
                 id(can0)->send_data(0x123, false, data);
+            - delay: 200ms
+            - script.execute: hd55_send_idle_remote_frame
 
 button:
   - platform: template
     name: ${friendly_name} Drain Pump Toggle
     disabled_by_default: true
     on_press:
-      - canbus.send:
-          canbus_id: can0
-          can_id: 0x123
-          use_extended_id: false
-          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00]
+      - lambda: |-
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{0x01, 0x02, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+          id(can_tx_test_frames)++;
+          id(can0)->send_data(0x123, false, data);
+      - delay: 200ms
+      - script.execute: hd55_send_idle_remote_frame
+
+  - platform: template
+    name: ${friendly_name} Mode Button
+    disabled_by_default: true
+    on_press:
+      - lambda: |-
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{0x01, 0x04, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+          id(can_tx_test_frames)++;
+          id(can0)->send_data(0x123, false, data);
+      - delay: 200ms
+      - script.execute: hd55_send_idle_remote_frame

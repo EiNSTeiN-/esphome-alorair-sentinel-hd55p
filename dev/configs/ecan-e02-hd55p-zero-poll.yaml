@@ -1,0 +1,52 @@
+substitutions:
+  name: alorair-hd55p-poll
+  friendly_name: AlorAir HD55P Poll Diagnostic
+  name_add_mac_suffix: "true"
+  ecan_e02_project_name: einstein.alorair_hd55p
+  ecan_e02_project_version: "0.1.0"
+  ecan_e02_import_url: github://EiNSTeiN-/esphome-alorair-sentinel-hd55p/configs/alorair-hd55p-ecan-e02.yaml@main
+
+  can_bit_rate: 125KBPS
+  can_mode: NORMAL
+  can_node_id: "0x05"
+
+packages:
+  ecan_e02: github://EiNSTeiN-/esphome-ecan-e02/packages/ecan-e02-base.yaml@main
+
+external_components:
+  - source: github://EiNSTeiN-/esphome-ecan-e02@main
+    components: [ecan_e02]
+
+esphome:
+  comment: "AlorAir HD55P zero-payload poll diagnostic using Ebyte ECAN-E02"
+
+ecan_e02:
+  twai_status_monitor: true
+  update_interval: 10s
+
+interval:
+  - interval: 10s
+    then:
+      - script.execute: pulse_can_led
+      - lambda: |-
+          id(can_tx_test_frames)++;
+      - logger.log:
+          level: INFO
+          tag: hd55p_can
+          format: "tx status poll id=0x123 data=00 00 00 00 00 00 00 00"
+      - canbus.send:
+          canbus_id: can0
+          can_id: 0x123
+          use_extended_id: false
+          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          static std::string previous_frame;
+          const std::string frame = id(can_last_frame).state;
+          if (frame.empty() || frame == previous_frame) {
+            return;
+          }
+          previous_frame = frame;
+          ESP_LOGI("hd55p_can", "rx %s", frame.c_str());
