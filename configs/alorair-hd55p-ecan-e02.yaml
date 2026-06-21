@@ -260,7 +260,7 @@ switch:
             - lambda: |-
                 const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
                 const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
-                const std::vector<uint8_t> data{0x01, 0x01, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
+                const std::vector<uint8_t> data{0x01, 0x01, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
                 char frame[128];
                 snprintf(frame, sizeof(frame),
                          "power_on_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
@@ -360,7 +360,7 @@ button:
       - script.execute: hd55_send_idle_remote_frame
 
   - platform: template
-    name: ${friendly_name} Mode Button
+    name: ${friendly_name} Sensor Source Button
     disabled_by_default: true
     on_press:
       - lambda: |-
@@ -369,7 +369,7 @@ button:
           const std::vector<uint8_t> data{0x01, 0x04, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
           char frame[128];
           snprintf(frame, sizeof(frame),
-                   "mode_button_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                   "sensor_source_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
           ESP_LOGI("hd55_can", "tx %s", frame);
           id(hd55_last_command_frame).publish_state(frame);
