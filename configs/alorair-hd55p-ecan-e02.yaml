@@ -21,6 +21,7 @@ external_components:
   - source: github://EiNSTeiN-/esphome-ecan-e02@main
     components: [ecan_e02]
   - source: github://EiNSTeiN-/esphome-alorair-sentinel-hd55p@main
+    refresh: 0s
     components: [alorair_hd55p]
 
 esphome:
