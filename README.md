@@ -27,7 +27,7 @@ The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd
 - `can_bit_rate: 50KBPS`
 - send a periodic remote-panel idle frame on CAN ID `0x123`, every `5s` by default
 - decode HD55P remote-panel responses received on `0x123`
-- expose humidity, setpoint, temperature, status text, power/dehumidifying/continuous/pumping flags, setpoint/continuous controls, power command buttons, and remote-button-style diagnostic controls
+- expose humidity, setpoint, temperature, status text, power/dehumidifying/continuous/pumping flags, a same-device ESPHome climate entity, setpoint/continuous controls, power command controls, and remote-button-style diagnostic controls
 
 If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
 
@@ -37,6 +37,11 @@ You can tune the normal remote-panel polling cadence with:
 substitutions:
   hd55_poll_interval: 5s
 ```
+
+The main Home Assistant control surface is a `climate` entity named `${friendly_name} Dehumidifier`.
+ESPHome does not currently expose a native dehumidifier platform from external components, so this component uses Home Assistant's climate domain with `DRY`/`OFF` modes, target humidity, current humidity, current temperature, and action feedback. `DRY` is the requested operating mode; the `Dehumidifying` binary sensor and the climate action report whether the HD55P's CAN status byte says humidity demand is currently active.
+
+The `Power Command Switch` is separate from the raw `Power` binary sensor. It sends the documented remote power frames, then waits through the delayed HD55P transition before settling its state. Use the `Power` sensor for returned CAN feedback and the `Dehumidifying` sensor/climate action for demand/running feedback.
 
 ## Hardware
 
@@ -233,7 +238,7 @@ Unit-to-remote display frames are documented on CAN ID `0x3b0`:
 
 The Tinymicros page includes more complete bit tables for remote display symbols and error indications.
 
-The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames. Controls default to 50KBPS remote-emulation frames because this is the command family that produces a visible HD55P response on the tested unit. The humidity setpoint control is not optimistic: Home Assistant reflects the next setpoint reported by the dehumidifier, not merely the value sent. Continuous mode uses the documented remote C-button frame with button value `0x01`. The sensor source button is exposed as a diagnostic because observed logs show the documented Mode command toggles byte-5 bit `0x40`, which appears to select local-vs-remote display measurements rather than changing dehumidifier operation. Power-off has been observed with a `0x00` power value; power-on uses a `0x01` power value because the off-state HD55P response ignored the `0x00` form and only toggled the display-local bit. The power commands are exposed as stateless `Turn On` and `Turn Off` buttons because the machine reports delayed/intermediate shutdown states for roughly two minutes. The `Power` binary sensor remains the returned CAN feedback. Byte-5 bit `0x01` is not used as power because captures showed it tracks setpoint-driven dehumidification demand instead.
+The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames. Controls default to 50KBPS remote-emulation frames because this is the command family that produces a visible HD55P response on the tested unit. The humidity setpoint control is not optimistic: Home Assistant reflects the next setpoint reported by the dehumidifier, not merely the value sent. Continuous mode uses the documented remote C-button frame with button value `0x01`. The sensor source button is exposed as a diagnostic because observed logs show the documented Mode command toggles byte-5 bit `0x40`, which appears to select local-vs-remote display measurements rather than changing dehumidifier operation. Power-off has been observed with a `0x00` power value; power-on uses a `0x01` power value because the off-state HD55P response ignored the `0x00` form and only toggled the display-local bit. The `Turn On`/`Turn Off` buttons, `Power Command Switch`, and climate `DRY`/`OFF` modes all send those same documented remote frames. The command switch deliberately waits through the observed delayed/intermediate shutdown period before settling off. The `Power` binary sensor remains the returned CAN feedback. Byte-5 bit `0x01` is not used as power because captures showed it tracks setpoint-driven dehumidification demand instead.
 
 ## Flash and use the example
 
