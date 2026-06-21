@@ -10,6 +10,7 @@ substitutions:
   can_bit_rate: 50KBPS
   can_mode: NORMAL
   can_node_id: "0x05"
+  hd55_poll_interval: 5s
   hd55_remote_humidity: "50"
   hd55_remote_temperature_c: "20"
 
@@ -47,7 +48,7 @@ script:
           id(can0)->send_data(0x123, false, data);
 
 interval:
-  - interval: 1s
+  - interval: ${hd55_poll_interval}
     then:
       - script.execute: hd55_send_idle_remote_frame
 

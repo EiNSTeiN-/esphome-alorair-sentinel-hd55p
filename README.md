@@ -25,11 +25,18 @@ The CAN port and protocol vary across the HD55 family:
 The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd55p-ecan-e02.yaml) defaults to the confirmed ECAN-E02 bench behavior:
 
 - `can_bit_rate: 50KBPS`
-- send a periodic remote-panel idle frame on CAN ID `0x123`
+- send a periodic remote-panel idle frame on CAN ID `0x123`, every `5s` by default
 - decode HD55P remote-panel responses received on `0x123`
 - expose humidity, setpoint, temperature, status text, power/continuous/pumping flags, setpoint/continuous controls, and remote-button-style diagnostic controls
 
 If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
+
+You can tune the normal remote-panel polling cadence with:
+
+```yaml
+substitutions:
+  hd55_poll_interval: 5s
+```
 
 ## Hardware
 
@@ -106,7 +113,7 @@ The official HD55/HD55S manual also states that the machine has a one minute fan
 
 ### Confirmed ECAN-E02 / HD55P bench behavior
 
-The tested HD55P responded at `50KBPS` when the ECAN-E02 transmitted an idle remote-panel frame once per second:
+The tested HD55P responded at `50KBPS` when the ECAN-E02 transmitted an idle remote-panel frame. Early bench validation used one frame per second; the main config now defaults to one frame every five seconds to reduce CAN traffic while keeping Home Assistant state fresh enough for normal control:
 
 | Direction | CAN ID | Data |
 | --- | --- | --- |
