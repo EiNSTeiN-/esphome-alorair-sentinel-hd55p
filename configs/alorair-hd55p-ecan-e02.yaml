@@ -198,7 +198,6 @@ binary_sensor:
   - platform: template
     id: hd55_pumping_sensor
     name: ${friendly_name} Pumping
-    disabled_by_default: true
 
   - platform: template
     id: hd55_display_local_sensor

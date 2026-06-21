@@ -149,7 +149,7 @@ The current display/status candidate interpretation is:
 | --- | --- | --- |
 | 0 | `0x01` | Powered on / idle capable |
 | 3 | `0x08` | Continuous mode candidate |
-| 4 | `0x10` | Pumping / drain-pump candidate |
+| 4 | `0x10` | Drain pump active / pumping |
 | 6 | `0x40` | Displaying local measurements instead of remote measurements |
 
 The compressor-running bit has not been confirmed for the HD55P 50KBPS display frame. The config therefore does not claim the dehumidifier is running from CAN alone. If running state is needed, prefer a confirmed dry-contact signal from A1/A2 or a new capture taken while the compressor is known to be running.
@@ -278,7 +278,7 @@ If Home Assistant sees the ECAN-E02 but no dehumidifier data arrives:
 6. If using a board other than ECAN-E02, confirm any CAN transceiver enable, standby, or 5 V enable pins. Several thread reports were fixed by enabling CAN support pins on LilyGO T-CAN-style boards.
 7. Keep a raw frame log and compare against the byte tables above.
 
-If a control transmits but the entity immediately returns to the old state, trust the returned HD55P frame. The main controls are intentionally non-optimistic where possible so rejected commands do not leave Home Assistant showing a fictional state. Power and drain-pump are still button-style commands, so their visible effect depends on the current physical state and model support. Continuous mode sends a `35%` remote-style setpoint and disables by sending the last normal setpoint observed from the HD55P.
+If a control transmits but the entity immediately returns to the old state, trust the returned HD55P frame. The main controls are intentionally non-optimistic where possible so rejected commands do not leave Home Assistant showing a fictional state. Power and drain-pump are still button-style commands, so their visible effect depends on the current physical state and model support. The `Pumping` binary sensor is the current drain-pump active/status bit from byte 5 mask `0x10`. Continuous mode sends a `35%` remote-style setpoint and disables by sending the last normal setpoint observed from the HD55P.
 
 ## Existing repositories and sources
 
