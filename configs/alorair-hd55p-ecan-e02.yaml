@@ -70,13 +70,12 @@ canbus:
               }
 
               const uint8_t status = x[5];
-              const bool power = (status & 0x01) != 0;
+              const uint8_t persistent_status = status & 0x3F;
+              const bool power = persistent_status != 0;
+              const bool dehumidifying = (status & 0x01) != 0;
               const bool continuous = (status & 0x08) != 0;
               const bool pumping = (status & 0x10) != 0;
               const bool display_local = (status & 0x40) != 0;
-
-              // The HD55P 50KBPS display frame has not yielded a reliable compressor-running bit yet.
-              const bool running = false;
 
               id(hd55_power) = power;
               id(hd55_continuous) = continuous;
@@ -90,20 +89,20 @@ canbus:
               id(hd55_raw_byte_6).publish_state(x[6]);
               id(hd55_raw_byte_7).publish_state(x[7]);
               id(hd55_power_sensor).publish_state(power);
-              id(hd55_running_sensor).publish_state(running);
+              id(hd55_dehumidifying_sensor).publish_state(dehumidifying);
               id(hd55_continuous_sensor).publish_state(continuous);
               id(hd55_pumping_sensor).publish_state(pumping);
               id(hd55_display_local_sensor).publish_state(display_local);
 
               std::string status_text;
-              if (running && pumping) {
-                status_text = continuous ? "Continuous running, pumping" : "Running, pumping";
-              } else if (running) {
-                status_text = continuous ? "Continuous running" : "Running";
+              if (dehumidifying && pumping) {
+                status_text = continuous ? "Continuous dehumidifying, pumping" : "Dehumidifying, pumping";
+              } else if (dehumidifying) {
+                status_text = continuous ? "Continuous dehumidifying" : "Dehumidifying";
               } else if (pumping) {
-                status_text = power ? "Idle, pumping" : "Off, pumping";
+                status_text = power ? "Standby, pumping" : "Off, pumping";
               } else if (power) {
-                status_text = continuous ? "Continuous idle" : "Idle";
+                status_text = continuous ? "Continuous standby" : "Standby";
               } else if (continuous) {
                 status_text = "Continuous off";
               } else {
@@ -178,9 +177,8 @@ binary_sensor:
     device_class: power
 
   - platform: template
-    id: hd55_running_sensor
-    name: ${friendly_name} Running
-    device_class: running
+    id: hd55_dehumidifying_sensor
+    name: ${friendly_name} Dehumidifying
 
   - platform: template
     id: hd55_continuous_sensor

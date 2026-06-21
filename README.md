@@ -27,7 +27,7 @@ The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd
 - `can_bit_rate: 50KBPS`
 - send a periodic remote-panel idle frame on CAN ID `0x123`, every `5s` by default
 - decode HD55P remote-panel responses received on `0x123`
-- expose humidity, setpoint, temperature, status text, power/continuous/pumping flags, setpoint/continuous controls, and remote-button-style diagnostic controls
+- expose humidity, setpoint, temperature, status text, power/dehumidifying/continuous/pumping flags, setpoint/continuous controls, and remote-button-style diagnostic controls
 
 If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
 
@@ -128,7 +128,7 @@ Two negative tests are also useful:
 - `50KBPS` polling with `id=0x123 data=00 00 00 00 00 00 00 00` stayed electrically clean but did not elicit frames.
 - Newer direct command frames on the `50KBPS` port were transmitted but not accepted by the tested HD55P: direct continuous, drain-pump, and setpoint commands were followed by real status frames showing the old state/setpoint.
 
-The byte interpretation for the confirmed `0x123` response is still provisional, but the HD55P config intentionally favors the observed 50KBPS HD55P behavior. The current ESPHome example treats byte `0` as humidity, byte `1` as setpoint, byte `3` as Celsius temperature, and byte `5` as the display/status candidate. Byte `4` changes while the real machine state appears steady, so it is exposed as a raw diagnostic byte and is not used for power or running state.
+The byte interpretation for the confirmed `0x123` response is still provisional, but the HD55P config intentionally favors the observed 50KBPS HD55P behavior. The current ESPHome example treats byte `0` as humidity, byte `1` as setpoint, byte `3` as Celsius temperature, and byte `5` as the display/status candidate. Byte `4` changes while the real machine state appears steady, so it is exposed as a raw diagnostic byte and is not used for power or dehumidifying state.
 
 For the current HD55P 50KBPS remote-panel response:
 
@@ -147,12 +147,14 @@ The current display/status candidate interpretation is:
 
 | Bit | Mask | Meaning used by this config |
 | --- | --- | --- |
-| 0 | `0x01` | Powered on / idle capable |
+| 0 | `0x01` | Dehumidifying / humidistat demand active |
+| 1 | `0x02` | Standby / no dehumidification demand indicator candidate |
 | 3 | `0x08` | Continuous mode candidate |
 | 4 | `0x10` | Drain pump active / pumping |
+| 5 | `0x20` | Powered/standby display-status candidate |
 | 6 | `0x40` | Displaying local measurements instead of remote measurements |
 
-The compressor-running bit has not been confirmed for the HD55P 50KBPS display frame. The config therefore does not claim the dehumidifier is running from CAN alone. If running state is needed, prefer a confirmed dry-contact signal from A1/A2 or a new capture taken while the compressor is known to be running.
+The power sensor and switch state are inferred from persistent display/status bits in byte `5`, excluding the transient display-source bit `0x40`. A stable byte `5` value of `0x00` is treated as off, while values such as `0x21` and `0x22` are treated as powered standby/dehumidification states. The dehumidifying sensor follows bit `0x01`, which changed with setpoint-driven humidistat demand in observed captures. It should still be treated as CAN-reported dehumidification demand, not a separately proven compressor-relay signal. If true physical compressor state is needed, prefer a confirmed dry-contact signal from A1/A2 or power monitoring.
 
 ### Newer HD55 / HD55P direct-command notes
 
@@ -231,7 +233,7 @@ Unit-to-remote display frames are documented on CAN ID `0x3b0`:
 
 The Tinymicros page includes more complete bit tables for remote display symbols and error indications.
 
-The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames. Controls default to 50KBPS remote-emulation frames because this is the command family that produces a visible HD55P response on the tested unit. The humidity setpoint control is not optimistic: Home Assistant reflects the next setpoint reported by the dehumidifier, not merely the value sent. Continuous mode uses the documented remote C-button frame with button value `0x01`. The sensor source button is exposed as a diagnostic because observed logs show the documented Mode command toggles byte-5 bit `0x40`, which appears to select local-vs-remote display measurements rather than changing dehumidifier operation. Power-off has been observed with a `0x00` power value; power-on uses a `0x01` power value because the off-state HD55P response ignored the `0x00` form and only toggled the display-local bit.
+The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames. Controls default to 50KBPS remote-emulation frames because this is the command family that produces a visible HD55P response on the tested unit. The humidity setpoint control is not optimistic: Home Assistant reflects the next setpoint reported by the dehumidifier, not merely the value sent. Continuous mode uses the documented remote C-button frame with button value `0x01`. The sensor source button is exposed as a diagnostic because observed logs show the documented Mode command toggles byte-5 bit `0x40`, which appears to select local-vs-remote display measurements rather than changing dehumidifier operation. Power-off has been observed with a `0x00` power value; power-on uses a `0x01` power value because the off-state HD55P response ignored the `0x00` form and only toggled the display-local bit. Byte-5 bit `0x01` is not used as power because captures showed it tracks setpoint-driven dehumidification demand instead.
 
 ## Flash and use the example
 
@@ -278,7 +280,7 @@ If Home Assistant sees the ECAN-E02 but no dehumidifier data arrives:
 6. If using a board other than ECAN-E02, confirm any CAN transceiver enable, standby, or 5 V enable pins. Several thread reports were fixed by enabling CAN support pins on LilyGO T-CAN-style boards.
 7. Keep a raw frame log and compare against the byte tables above.
 
-If a control transmits but the entity immediately returns to the old state, trust the returned HD55P frame. The main controls are intentionally non-optimistic where possible so rejected commands do not leave Home Assistant showing a fictional state. Power, continuous, sensor-source, and drain-pump are still button-style commands, so their visible effect depends on the current physical state and model support. The `Pumping` binary sensor is the current drain-pump active/status bit from byte 5 mask `0x10`. Continuous mode sends the documented remote C-button frame, `01 03 01 RH TEMP 00 00 00`.
+If a control transmits but the entity immediately returns to the old state, trust the returned HD55P frame. The main controls are intentionally non-optimistic where possible so rejected commands do not leave Home Assistant showing a fictional state. Power, continuous, sensor-source, and drain-pump are still button-style commands, so their visible effect depends on the current physical state and model support. The `Dehumidifying` binary sensor follows byte 5 mask `0x01`, which tracks humidistat demand in observed captures. The `Pumping` binary sensor is the current drain-pump active/status bit from byte 5 mask `0x10`. Continuous mode sends the documented remote C-button frame, `01 03 01 RH TEMP 00 00 00`.
 
 ## Existing repositories and sources
 
