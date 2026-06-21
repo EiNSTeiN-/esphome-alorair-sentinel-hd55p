@@ -27,7 +27,7 @@ The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd
 - `can_bit_rate: 50KBPS`
 - send a periodic remote-panel idle frame on CAN ID `0x123`
 - decode HD55P remote-panel responses received on `0x123`
-- expose humidity, setpoint, temperature, status text, power/continuous/pumping flags, setpoint control, and remote-button-style controls
+- expose humidity, setpoint, temperature, status text, power/continuous/pumping flags, setpoint/continuous controls, and remote-button-style diagnostic controls
 
 If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
 
@@ -154,6 +154,7 @@ These reports are still useful for comparison, but they are not the default in t
 | Poll/request status | `0x123` | `00 00 00 00 00 00 00 00` |
 | Set humidity | `0x123` | first byte is desired RH + `0x80`; remaining bytes `00` |
 | Toggle power | `0x123` | `00 00 01 00 00 00 00 00` |
+| Toggle drain pump | `0x123` | `00 00 02 01 00 00 00 00` |
 | Enable continuous mode | `0x123` | `00 00 04 00 00 00 00 00` |
 | Disable continuous mode | `0x123` | send a normal setpoint frame |
 
@@ -219,7 +220,7 @@ Unit-to-remote display frames are documented on CAN ID `0x3b0`:
 
 The Tinymicros page includes more complete bit tables for remote display symbols and error indications.
 
-The active controls in the ESPHome example use these remote-button-style frames rather than the newer zero-payload command format. Treat the controls as experimental until you have verified your own unit's response in Home Assistant and the raw CAN logs. The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames.
+The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames. Setpoint, power, drain-pump, and continuous-mode controls use the HD55P direct command format because the Tinymicros remote-button continuous frame was observed to transmit but not change the tested HD55P state. The remaining remote-button-style mode button is exposed as a diagnostic and should be treated as experimental until you have verified your own unit's response in Home Assistant and the raw CAN logs.
 
 ## Flash and use the example
 
@@ -248,6 +249,7 @@ Use the remote-emulator diagnostic first on an ECAN-E02 plus HD55P setup matchin
 After adoption in Home Assistant, enable the disabled-by-default debug entities if needed:
 
 - `CAN Last Frame`
+- `CAN Last Command Frame`
 - `CAN RX Logging`
 - `Raw Byte 4`
 - ECAN-E02 heap/version/IP diagnostics
@@ -264,7 +266,7 @@ If Home Assistant sees the ECAN-E02 but no dehumidifier data arrives:
 6. If using a board other than ECAN-E02, confirm any CAN transceiver enable, standby, or 5 V enable pins. Several thread reports were fixed by enabling CAN support pins on LilyGO T-CAN-style boards.
 7. Keep a raw frame log and compare against the byte tables above.
 
-If controls work but switch states appear backward or stale, remember that the power and continuous controls are command toggles. The example only sends a toggle when the last decoded status suggests a change is needed; if status frames are missing, avoid using the switches until receiving is working.
+If controls work but switch states appear backward or stale, remember that the power control is a command toggle. The continuous switch sends an explicit enable command and disables continuous mode by sending the current normal humidity setpoint. If status frames are missing, avoid using the switches until receiving is working.
 
 ## Existing repositories and sources
 
