@@ -26,8 +26,8 @@ The example config in [`configs/alorair-hd55p-ecan-e02.yaml`](configs/alorair-hd
 
 - `can_bit_rate: 50KBPS`
 - send a periodic remote-panel idle frame on CAN ID `0x123`
-- decode status-like frames received on `0x123` or `0x3b0`
-- expose humidity, setpoint, temperature, status text, power/running/continuous/pumping flags, setpoint control, and remote-button-style controls
+- decode HD55P remote-panel responses received on `0x123`
+- expose humidity, setpoint, temperature, status text, power/continuous/pumping flags, setpoint control, and remote-button-style controls
 
 If you see no frames, try `can_bit_rate: 125KBPS` with the zero-poll diagnostic before changing hardware. Also verify CANH/CANL are not swapped and that the CAN interface is in `NORMAL` mode when you expect to transmit requests.
 
@@ -111,7 +111,7 @@ The tested HD55P responded at `50KBPS` when the ECAN-E02 transmitted an idle rem
 | Direction | CAN ID | Data |
 | --- | --- | --- |
 | ECAN-E02 to HD55P | `0x123` | `01 00 00 32 14 00 00 00` |
-| HD55P to ECAN-E02 | `0x123` | examples: `2F 2A 32 18 08 01 14 20`, `2F 2A 32 18 07 01 14 20` |
+| HD55P to ECAN-E02 | `0x123` | examples: `2F 2A 32 18 08 01 14 20`, `2F 2A 32 18 07 01 14 20`, `34 24 32 14 04 01 14 20`, `33 24 32 14 03 01 14 20` |
 
 TWAI status stayed clean during this test: no TX/RX errors, missed frames, overruns, arbitration losses, or bus errors. That confirms the ECAN-E02 CAN pins, isolated transceiver path, HD55P wiring, termination, and `50KBPS` bitrate for this setup.
 
@@ -120,11 +120,34 @@ Two negative tests are also useful:
 - `125KBPS` active polling on ID `0x123` produced TWAI TX/RX/bus errors on the same wiring, so it is not the correct bitrate for the tested port.
 - `50KBPS` polling with `id=0x123 data=00 00 00 00 00 00 00 00` stayed electrically clean but did not elicit frames.
 
-The byte interpretation for the confirmed `0x123` response is still provisional. The current ESPHome example treats byte `0` as humidity, byte `1` as setpoint, byte `3` as Celsius temperature, and byte `4` as a status-like bit field. Raw bytes are also exposed as disabled-by-default diagnostics so the mapping can be corrected as more captures are collected.
+The byte interpretation for the confirmed `0x123` response is still provisional, but the HD55P config intentionally favors the observed 50KBPS HD55P behavior. The current ESPHome example treats byte `0` as humidity, byte `1` as setpoint, byte `3` as Celsius temperature, and byte `5` as the display/status candidate. Byte `4` changes while the real machine state appears steady, so it is exposed as a raw diagnostic byte and is not used for power or running state.
+
+For the current HD55P 50KBPS remote-panel response:
+
+| Byte | Meaning used by this config |
+| --- | --- |
+| 0 | Current relative humidity, percent |
+| 1 | Humidity setpoint, percent |
+| 2 | Remote/display humidity echo |
+| 3 | Temperature, Celsius |
+| 4 | Raw/volatile diagnostic byte; not a state bitfield |
+| 5 | Display/status candidate |
+| 6 | Raw/status variant |
+| 7 | Raw/status variant |
+
+The current display/status candidate interpretation is:
+
+| Bit | Mask | Meaning used by this config |
+| --- | --- | --- |
+| 0 | `0x01` | Powered on / idle capable |
+| 3 | `0x08` | Continuous mode candidate |
+| 4 | `0x10` | Pumping / drain-pump candidate |
+
+The compressor-running bit has not been confirmed for the HD55P 50KBPS display frame. The config therefore does not claim the dehumidifier is running from CAN alone. If running state is needed, prefer a confirmed dry-contact signal from A1/A2 or a new capture taken while the compressor is known to be running.
 
 ### Newer HD55 / HD55P-style notes
 
-These reports are still useful for comparison, but they are not the default in this repo after the ECAN-E02 bench validation:
+These reports are still useful for comparison, but they are not the default in this repo after the ECAN-E02 HD55P validation:
 
 | Direction | CAN ID | Data |
 | --- | --- | --- |
@@ -134,7 +157,7 @@ These reports are still useful for comparison, but they are not the default in t
 | Enable continuous mode | `0x123` | `00 00 04 00 00 00 00 00` |
 | Disable continuous mode | `0x123` | send a normal setpoint frame |
 
-Status frames reported in the thread use this byte layout:
+Status frames reported in the thread for newer/125KBPS-style setups use this byte layout:
 
 | Byte | Meaning |
 | --- | --- |
@@ -147,7 +170,7 @@ Status frames reported in the thread use this byte layout:
 | 6 | Unknown/status variant by model |
 | 7 | Unknown/status variant by model |
 
-The common status-byte interpretation is:
+The common newer/125KBPS status-byte interpretation is:
 
 | Bit | Mask | Meaning |
 | --- | --- | --- |
@@ -196,7 +219,7 @@ Unit-to-remote display frames are documented on CAN ID `0x3b0`:
 
 The Tinymicros page includes more complete bit tables for remote display symbols and error indications.
 
-The active controls in the ESPHome example use these remote-button-style frames rather than the newer zero-payload command format. Treat the controls as experimental until you have verified your own unit's response in Home Assistant and the raw CAN logs.
+The active controls in the ESPHome example use these remote-button-style frames rather than the newer zero-payload command format. Treat the controls as experimental until you have verified your own unit's response in Home Assistant and the raw CAN logs. The main HD55P config decodes the observed `0x123` 50KBPS response and does not apply the older `0x3b0` display-frame layout to those frames.
 
 ## Flash and use the example
 
@@ -226,6 +249,7 @@ After adoption in Home Assistant, enable the disabled-by-default debug entities 
 
 - `CAN Last Frame`
 - `CAN RX Logging`
+- `Raw Byte 4`
 - ECAN-E02 heap/version/IP diagnostics
 
 ## Troubleshooting

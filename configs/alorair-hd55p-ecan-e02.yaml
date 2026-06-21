@@ -51,91 +51,64 @@ interval:
     then:
       - script.execute: hd55_send_idle_remote_frame
 
-  - interval: 1s
-    then:
-      - lambda: |-
-          static std::string previous_frame;
-          const std::string frame = id(can_last_frame).state;
-          if (frame.empty() || frame == previous_frame) {
-            return;
-          }
-          previous_frame = frame;
+canbus:
+  - id: !extend can0
+    on_frame:
+      - can_id: 0x123
+        can_id_mask: 0x7FF
+        then:
+          - lambda: |-
+              if (remote_transmission_request || x.size() < 8) {
+                return;
+              }
 
-          const size_t id_pos = frame.find("id=0x");
-          const size_t data_pos = frame.find("data=");
-          if (id_pos == std::string::npos || data_pos == std::string::npos) {
-            return;
-          }
+              // Confirmed HD55P 50KBPS remote-panel response:
+              // RH, setpoint, remote/display RH, temp C, volatile D4, display/status D5, D6, D7.
+              // D4 changes while the machine state is steady, so do not use it as the state bitfield.
+              if (x[0] < 20 || x[0] > 100 || x[1] < 20 || x[1] > 100 || x[3] > 60) {
+                return;
+              }
 
-          const uint32_t frame_id = strtoul(frame.c_str() + id_pos + 5, nullptr, 16);
-          if (frame_id != 0x123 && frame_id != 0x3B0) {
-            return;
-          }
+              const uint8_t status = x[5];
+              const bool power = (status & 0x01) != 0;
+              const bool continuous = (status & 0x08) != 0;
+              const bool pumping = (status & 0x10) != 0;
 
-          std::vector<uint8_t> bytes;
-          std::string data = frame.substr(data_pos + 5);
-          for (size_t i = 0; i + 1 < data.size() && bytes.size() < 8;) {
-            while (i < data.size() && data[i] == ' ') {
-              i++;
-            }
-            if (i + 1 >= data.size()) {
-              break;
-            }
-            char hex[3] = {data[i], data[i + 1], '\0'};
-            bytes.push_back(static_cast<uint8_t>(strtoul(hex, nullptr, 16)));
-            i += 2;
-          }
-          if (bytes.size() < 8) {
-            return;
-          }
+              // The HD55P 50KBPS display frame has not yielded a reliable compressor-running bit yet.
+              const bool running = false;
 
-          // Confirmed HD55P bench frames at 50KBPS look like:
-          // RH, setpoint, remote/display RH, temp C, status-ish, D5, D6, D7.
-          // Ignore request/command echo frames and unrelated CAN traffic.
-          if (bytes[0] < 20 || bytes[0] > 100 || bytes[1] < 20 || bytes[1] > 100 ||
-              bytes[3] > 60) {
-            return;
-          }
+              id(hd55_power) = power;
+              id(hd55_continuous) = continuous;
 
-          const uint8_t status = bytes[4];
-          const bool power = (status & 0x01) != 0;
-          const bool running = (status & 0x02) != 0;
-          const bool continuous = (status & 0x08) != 0;
-          const bool pumping = (status & 0x10) != 0;
+              id(hd55_humidity).publish_state(x[0]);
+              id(hd55_setpoint_actual).publish_state(x[1]);
+              id(hd55_temperature).publish_state(x[3]);
+              id(hd55_raw_byte_2).publish_state(x[2]);
+              id(hd55_raw_byte_4).publish_state(x[4]);
+              id(hd55_status_byte).publish_state(status);
+              id(hd55_raw_byte_5).publish_state(x[5]);
+              id(hd55_raw_byte_6).publish_state(x[6]);
+              id(hd55_raw_byte_7).publish_state(x[7]);
+              id(hd55_power_sensor).publish_state(power);
+              id(hd55_running_sensor).publish_state(running);
+              id(hd55_continuous_sensor).publish_state(continuous);
+              id(hd55_pumping_sensor).publish_state(pumping);
 
-          id(hd55_power) = power;
-          id(hd55_continuous) = continuous;
-
-          id(hd55_humidity).publish_state(bytes[0]);
-          id(hd55_setpoint_actual).publish_state(bytes[1]);
-          id(hd55_temperature).publish_state(bytes[3]);
-          id(hd55_raw_byte_2).publish_state(bytes[2]);
-          id(hd55_status_byte).publish_state(status);
-          id(hd55_raw_byte_5).publish_state(bytes[5]);
-          id(hd55_raw_byte_6).publish_state(bytes[6]);
-          id(hd55_raw_byte_7).publish_state(bytes[7]);
-          id(hd55_power_sensor).publish_state(power);
-          id(hd55_running_sensor).publish_state(running);
-          id(hd55_continuous_sensor).publish_state(continuous);
-          id(hd55_pumping_sensor).publish_state(pumping);
-
-          std::string status_text;
-          if (!power && !continuous && !pumping) {
-            status_text = "Off";
-          } else if (running && pumping) {
-            status_text = continuous ? "Continuous running, pumping" : "Running, pumping";
-          } else if (running) {
-            status_text = continuous ? "Continuous running" : "Running";
-          } else if (pumping) {
-            status_text = power ? "Idle, pumping" : "Off, pumping";
-          } else if (power) {
-            status_text = continuous ? "Continuous idle" : "Idle";
-          } else if (continuous) {
-            status_text = "Continuous off";
-          } else {
-            status_text = "Unknown";
-          }
-          id(hd55_status_text).publish_state(status_text);
+              std::string status_text;
+              if (running && pumping) {
+                status_text = continuous ? "Continuous running, pumping" : "Running, pumping";
+              } else if (running) {
+                status_text = continuous ? "Continuous running" : "Running";
+              } else if (pumping) {
+                status_text = power ? "Idle, pumping" : "Off, pumping";
+              } else if (power) {
+                status_text = continuous ? "Continuous idle" : "Idle";
+              } else if (continuous) {
+                status_text = "Continuous off";
+              } else {
+                status_text = "Off";
+              }
+              id(hd55_status_text).publish_state(status_text);
 
 sensor:
   - platform: template
@@ -170,6 +143,12 @@ sensor:
   - platform: template
     id: hd55_raw_byte_2
     name: ${friendly_name} Raw Byte 2
+    disabled_by_default: true
+    accuracy_decimals: 0
+
+  - platform: template
+    id: hd55_raw_byte_4
+    name: ${friendly_name} Raw Byte 4
     disabled_by_default: true
     accuracy_decimals: 0
 
