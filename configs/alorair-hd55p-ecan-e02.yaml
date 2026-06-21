@@ -33,6 +33,10 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: hd55_last_normal_setpoint
+    type: uint8_t
+    restore_value: true
+    initial_value: "36"
 
 script:
   - id: hd55_send_idle_remote_frame
@@ -74,12 +78,16 @@ canbus:
               const bool power = (status & 0x01) != 0;
               const bool continuous = (status & 0x08) != 0;
               const bool pumping = (status & 0x10) != 0;
+              const bool display_local = (status & 0x40) != 0;
 
               // The HD55P 50KBPS display frame has not yielded a reliable compressor-running bit yet.
               const bool running = false;
 
               id(hd55_power) = power;
               id(hd55_continuous) = continuous;
+              if (x[1] >= 36 && x[1] <= 99) {
+                id(hd55_last_normal_setpoint) = x[1];
+              }
 
               id(hd55_humidity).publish_state(x[0]);
               id(hd55_setpoint_actual).publish_state(x[1]);
@@ -94,6 +102,7 @@ canbus:
               id(hd55_running_sensor).publish_state(running);
               id(hd55_continuous_sensor).publish_state(continuous);
               id(hd55_pumping_sensor).publish_state(pumping);
+              id(hd55_display_local_sensor).publish_state(display_local);
 
               std::string status_text;
               if (running && pumping) {
@@ -191,6 +200,11 @@ binary_sensor:
     name: ${friendly_name} Pumping
     disabled_by_default: true
 
+  - platform: template
+    id: hd55_display_local_sensor
+    name: ${friendly_name} Display Local Measurements
+    disabled_by_default: true
+
 text_sensor:
   - platform: template
     id: hd55_status_text
@@ -205,26 +219,31 @@ number:
   - platform: template
     id: hd55_setpoint_control
     name: ${friendly_name} Humidity Setpoint
-    min_value: 36
+    min_value: 35
     max_value: 99
     step: 1
-    optimistic: true
-    restore_value: true
+    lambda: |-
+      if (id(hd55_setpoint_actual).has_state()) {
+        return id(hd55_setpoint_actual).state;
+      }
+      return {};
+    optimistic: false
     unit_of_measurement: "%"
     device_class: humidity
     set_action:
       - lambda: |-
           const uint8_t setpoint = static_cast<uint8_t>(x);
-          const std::vector<uint8_t> data{static_cast<uint8_t>(setpoint + 0x80), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{0x01, 0x05, setpoint, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
           char frame[128];
           snprintf(frame, sizeof(frame),
-                   "setpoint id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                   "setpoint_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
           ESP_LOGI("hd55_can", "tx %s", frame);
           id(hd55_last_command_frame).publish_state(frame);
           id(can_tx_test_frames)++;
           id(can0)->send_data(0x123, false, data);
-          id(hd55_setpoint_actual).publish_state(x);
       - delay: 200ms
       - script.execute: hd55_send_idle_remote_frame
 
@@ -240,10 +259,12 @@ switch:
             lambda: return !id(hd55_power);
           then:
             - lambda: |-
-                const std::vector<uint8_t> data{0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x01, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
                 char frame[128];
                 snprintf(frame, sizeof(frame),
-                         "power_on_toggle id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                         "power_on_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                          data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
                 ESP_LOGI("hd55_can", "tx %s", frame);
                 id(hd55_last_command_frame).publish_state(frame);
@@ -257,10 +278,12 @@ switch:
             lambda: return id(hd55_power);
           then:
             - lambda: |-
-                const std::vector<uint8_t> data{0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x01, 0x00, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
                 char frame[128];
                 snprintf(frame, sizeof(frame),
-                         "power_off_toggle id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                         "power_off_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                          data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
                 ESP_LOGI("hd55_can", "tx %s", frame);
                 id(hd55_last_command_frame).publish_state(frame);
@@ -280,10 +303,12 @@ switch:
             lambda: return !id(hd55_continuous);
           then:
             - lambda: |-
-                const std::vector<uint8_t> data{0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                const std::vector<uint8_t> data{0x01, 0x05, 0x23, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
                 char frame[128];
                 snprintf(frame, sizeof(frame),
-                         "continuous_on id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                         "continuous_on_setpoint35_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                          data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
                 ESP_LOGI("hd55_can", "tx %s", frame);
                 id(hd55_last_command_frame).publish_state(frame);
@@ -297,18 +322,16 @@ switch:
             lambda: return id(hd55_continuous);
           then:
             - lambda: |-
-                float setpoint = id(hd55_setpoint_control).state;
-                if (std::isnan(setpoint) || setpoint < 36.0f || setpoint > 99.0f) {
-                  setpoint = id(hd55_setpoint_actual).state;
+                const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+                const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+                uint8_t setpoint = id(hd55_last_normal_setpoint);
+                if (setpoint < 36 || setpoint > 99) {
+                  setpoint = 36;
                 }
-                if (std::isnan(setpoint) || setpoint < 36.0f || setpoint > 99.0f) {
-                  setpoint = 36.0f;
-                }
-                const uint8_t sp = static_cast<uint8_t>(setpoint);
-                const std::vector<uint8_t> data{static_cast<uint8_t>(sp + 0x80), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+                const std::vector<uint8_t> data{0x01, 0x05, setpoint, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
                 char frame[128];
                 snprintf(frame, sizeof(frame),
-                         "continuous_off_setpoint id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                         "continuous_off_setpoint_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                          data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
                 ESP_LOGI("hd55_can", "tx %s", frame);
                 id(hd55_last_command_frame).publish_state(frame);
@@ -323,10 +346,12 @@ button:
     disabled_by_default: true
     on_press:
       - lambda: |-
-          const std::vector<uint8_t> data{0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00};
+          const uint8_t remote_humidity = static_cast<uint8_t>(${hd55_remote_humidity});
+          const uint8_t remote_temperature = static_cast<uint8_t>(${hd55_remote_temperature_c});
+          const std::vector<uint8_t> data{0x01, 0x02, 0x01, remote_humidity, remote_temperature, 0x00, 0x00, 0x00};
           char frame[128];
           snprintf(frame, sizeof(frame),
-                   "drain_pump_toggle id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                   "drain_pump_remote id=0x00000123 rtr=false len=8 data=%02X %02X %02X %02X %02X %02X %02X %02X",
                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
           ESP_LOGI("hd55_can", "tx %s", frame);
           id(hd55_last_command_frame).publish_state(frame);
